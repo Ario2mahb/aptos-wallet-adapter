@@ -1,4 +1,4 @@
-import { MaybeHexString, Types } from 'aptos';
+import { Types } from 'aptos';
 import {
   WalletAccountChangeError,
   WalletDisconnectionError,
@@ -22,68 +22,55 @@ import {
   WalletReadyState
 } from './BaseAdapter';
 
-interface ConnectPontemAccount {
-  address: MaybeHexString;
-  method: string;
-  publicKey: MaybeHexString;
-  status: number;
+interface IApotsErrorResult {
+  code: number;
+  name: string;
+  message: string;
 }
 
-interface PontemAccount {
-  address: MaybeHexString;
-  publicKey?: MaybeHexString;
-  authKey?: MaybeHexString;
-  isConnected: boolean;
-}
-interface IPontemWallet {
-  connect: () => Promise<ConnectPontemAccount>;
-  account(): Promise<MaybeHexString>;
-  publicKey(): Promise<MaybeHexString>;
-  generateTransaction(sender: MaybeHexString, payload: any): Promise<any>;
-  signAndSubmit(
-    transaction: Types.TransactionPayload,
+type AddressInfo = { address: string; publicKey: string; authKey?: string };
+
+interface IFoxWallet {
+  connect: () => Promise<AddressInfo>;
+  account: () => Promise<AddressInfo>;
+  isConnected: () => Promise<boolean>;
+  signAndSubmitTransaction(
+    transaction: any,
     options?: any
-  ): Promise<{
-    success: boolean;
-    result: {
-      hash: Types.HexEncodedBytes;
-    };
-  }>;
-  isConnected(): Promise<boolean>;
-  signTransaction(transaction: Types.TransactionPayload, options?: any): Promise<Uint8Array>;
-  signMessage(message: SignMessagePayload): Promise<{
-    success: boolean;
-    result: SignMessageResponse;
-  }>;
+  ): Promise<{ hash: Types.HexEncodedBytes } | IApotsErrorResult>;
+  signTransaction(transaction: any, options?: any): Promise<Uint8Array | IApotsErrorResult>;
+  signMessage(message: SignMessagePayload): Promise<SignMessageResponse>;
   disconnect(): Promise<void>;
-  network(): Promise<NetworkInfo>;
-  onAccountChange(listener: (address: string | undefined) => void): Promise<void>;
-  onNetworkChange(listener: (network: NetworkInfo) => void): Promise<void>;
+  network(): Promise<WalletAdapterNetwork>;
+  requestId: Promise<number>;
+  onAccountChange: (listener: (newAddress: AddressInfo) => void) => void;
+  onNetworkChange: (listener: (network: { networkName: string }) => void) => void;
 }
 
-interface PontemWindow extends Window {
-  pontem?: IPontemWallet;
+interface AptosWindow extends Window {
+  foxwallet?: IFoxWallet;
+  aptos?: IFoxWallet;
 }
 
-declare const window: PontemWindow;
+declare const window: AptosWindow;
 
-export const PontemWalletName = 'Pontem' as WalletName<'Pontem'>;
+export const FoxWalletName = 'FoxWallet' as WalletName<'FoxWallet'>;
 
-export interface PontemWalletAdapterConfig {
-  provider?: IPontemWallet;
+export interface FoxWalletAdapterConfig {
+  provider?: IFoxWallet;
   // network?: WalletAdapterNetwork;
   timeout?: number;
 }
 
-export class PontemWalletAdapter extends BaseWalletAdapter {
-  name = PontemWalletName;
+export class FoxWalletAdapter extends BaseWalletAdapter {
+  name = FoxWalletName;
 
-  url = 'https://chrome.google.com/webstore/detail/pontem-wallet/phkbamefinggmakgklpkljjmgibohnba';
+  url = 'https://foxwallet.com';
 
   icon =
-    'https://www.gitbook.com/cdn-cgi/image/width=20,height=20,fit=contain,dpr=2,format=auto/https%3A%2F%2F736486047-files.gitbook.io%2F~%2Ffiles%2Fv0%2Fb%2Fgitbook-legacy-files%2Fo%2Fspaces%252F-MVVJKmKQGx983dZy_jr%252Favatar-1619180126965.png%3Fgeneration%3D1619180127194239%26alt%3Dmedia';
+    'https://hc.foxwallet.com/assets/files/FoxWallet-logo-v4-9d2b5eec06bdd619c8678a8052dfc8da.svg';
 
-  protected _provider: IPontemWallet | undefined;
+  protected _provider: IFoxWallet | undefined;
 
   protected _network: WalletAdapterNetwork;
 
@@ -100,16 +87,16 @@ export class PontemWalletAdapter extends BaseWalletAdapter {
 
   protected _connecting: boolean;
 
-  protected _wallet: PontemAccount | null;
+  protected _wallet: any | null;
 
   constructor({
     // provider,
     // network = WalletAdapterNetwork.Testnet,
     timeout = 10000
-  }: PontemWalletAdapterConfig = {}) {
+  }: FoxWalletAdapterConfig = {}) {
     super();
 
-    this._provider = typeof window !== 'undefined' ? window.pontem : undefined;
+    this._provider = typeof window !== 'undefined' ? window.aptos : undefined;
     this._network = undefined;
     this._timeout = timeout;
     this._connecting = false;
@@ -117,7 +104,7 @@ export class PontemWalletAdapter extends BaseWalletAdapter {
 
     if (typeof window !== 'undefined' && this._readyState !== WalletReadyState.Unsupported) {
       scopePollingDetectionStrategy(() => {
-        if (window.pontem) {
+        if (window.foxwallet && window.aptos) {
           this._readyState = WalletReadyState.Installed;
           this.emit('readyStateChange', this._readyState);
           return true;
@@ -167,41 +154,31 @@ export class PontemWalletAdapter extends BaseWalletAdapter {
         throw new WalletNotReadyError();
       this._connecting = true;
 
-      const provider = this._provider || window.pontem;
-      const isConnected = await provider?.isConnected();
-      if (isConnected) {
-        await provider?.disconnect();
-      }
+      const provider = this._provider || window.aptos;
       const response = await provider?.connect();
+      this._wallet = {
+        address: response?.address,
+        publicKey: response?.publicKey,
+        isConnected: true
+      };
 
-      if (!response) {
-        throw new WalletNotConnectedError('No connect response');
+      try {
+        const name = await provider?.network();
+        const chainId = null;
+        const api = null;
+
+        this._network = name;
+        this._chainId = chainId;
+        this._api = api;
+      } catch (error: any) {
+        const errMsg = error.message;
+        this.emit('error', new WalletGetNetworkError(errMsg));
+        throw error;
       }
 
-      const walletAccount = response.address;
-      const publicKey = response.publicKey;
-      if (walletAccount) {
-        this._wallet = {
-          address: walletAccount,
-          publicKey,
-          isConnected: true
-        };
-
-        try {
-          const networkInfo = await provider?.network();
-          this._network = networkInfo.name;
-          this._chainId = networkInfo.chainId;
-          this._api = networkInfo.api;
-        } catch (error: any) {
-          const errMsg = error.message;
-          this.emit('error', new WalletGetNetworkError(errMsg));
-          throw error;
-        }
-      }
-
-      this.emit('connect', this._wallet?.address || '');
+      this.emit('connect', this._wallet.publicKey);
     } catch (error: any) {
-      this.emit('error', new Error('User has rejected the connection'));
+      this.emit('error', error);
       throw error;
     } finally {
       this._connecting = false;
@@ -210,7 +187,7 @@ export class PontemWalletAdapter extends BaseWalletAdapter {
 
   async disconnect(): Promise<void> {
     const wallet = this._wallet;
-    const provider = this._provider || window.pontem;
+    const provider = this._provider || window.aptos;
     if (wallet) {
       this._wallet = null;
 
@@ -224,52 +201,56 @@ export class PontemWalletAdapter extends BaseWalletAdapter {
     this.emit('disconnect');
   }
 
-  async signTransaction(
-    transactionPyld: Types.TransactionPayload,
-    options?: any
-  ): Promise<Uint8Array> {
+  async signTransaction(transaction: Types.TransactionPayload, options?: any): Promise<Uint8Array> {
     try {
       const wallet = this._wallet;
-      const provider = this._provider || window.pontem;
+      const provider = this._provider || window.aptos;
       if (!wallet || !provider) throw new WalletNotConnectedError();
-      const response = await provider?.signTransaction(transactionPyld, options);
 
+      const response = await provider.signTransaction(transaction, options);
+      if ((response as IApotsErrorResult).code) {
+        throw new Error((response as IApotsErrorResult).message);
+      }
       return response as Uint8Array;
     } catch (error: any) {
-      this.emit('error', new WalletSignTransactionError(error));
+      const errMsg = error.message;
+      this.emit('error', new WalletSignTransactionError(errMsg));
       throw error;
     }
   }
 
   async signAndSubmitTransaction(
-    transactionPyld: Types.TransactionPayload,
+    transaction: Types.TransactionPayload,
     options?: any
   ): Promise<{ hash: Types.HexEncodedBytes }> {
     try {
       const wallet = this._wallet;
-      const provider = this._provider || window.pontem;
+      const provider = this._provider || window.aptos;
       if (!wallet || !provider) throw new WalletNotConnectedError();
-      const response = await provider?.signAndSubmit(transactionPyld, options);
 
-      if (!response || !response.success) {
-        throw new Error('No response');
+      const response = await provider.signAndSubmitTransaction(transaction, options);
+      if ((response as IApotsErrorResult).code) {
+        throw new Error((response as IApotsErrorResult).message);
       }
-      return { hash: response.result.hash };
+      return response as { hash: Types.HexEncodedBytes };
     } catch (error: any) {
-      this.emit('error', new WalletSignAndSubmitMessageError(error.message));
+      const errMsg = error.message;
+      this.emit('error', new WalletSignAndSubmitMessageError(errMsg));
       throw error;
     }
   }
 
-  async signMessage(messagePayload: SignMessagePayload): Promise<SignMessageResponse> {
+  async signMessage(msgPayload: SignMessagePayload): Promise<SignMessageResponse> {
     try {
       const wallet = this._wallet;
-      const provider = this._provider || window.pontem;
+      const provider = this._provider || window.aptos;
       if (!wallet || !provider) throw new WalletNotConnectedError();
-
-      const response = await provider?.signMessage(messagePayload);
-      if (response.success) {
-        return response.result;
+      if (typeof msgPayload !== 'object' || !msgPayload.nonce) {
+        throw new WalletSignMessageError('Invalid signMessage Payload');
+      }
+      const response = await provider?.signMessage(msgPayload);
+      if (response) {
+        return response;
       } else {
         throw new Error('Sign Message failed');
       }
@@ -283,26 +264,26 @@ export class PontemWalletAdapter extends BaseWalletAdapter {
   async onAccountChange(): Promise<void> {
     try {
       const wallet = this._wallet;
-      const provider = this._provider || window.pontem;
+      const provider = this._provider || window.aptos;
       if (!wallet || !provider) throw new WalletNotConnectedError();
-      const handleAccountChange = async (newAccount: string | undefined) => {
-        // disconnect wallet if newAccount is undefined
-        if (newAccount) {
-          const newPublicKey = await provider?.publicKey();
+      const handleAccountChange = async (newAccount: AddressInfo) => {
+        if (newAccount?.publicKey) {
           this._wallet = {
             ...this._wallet,
-            address: newAccount,
-            publicKey: newPublicKey
+            publicKey: newAccount.publicKey || this._wallet?.publicKey,
+            authKey: newAccount.authKey || this._wallet?.authKey,
+            address: newAccount.address || this._wallet?.address
           };
         } else {
           const response = await provider?.connect();
           this._wallet = {
             ...this._wallet,
+            authKey: response?.authKey || this._wallet?.authKey,
             address: response?.address || this._wallet?.address,
             publicKey: response?.publicKey || this._wallet?.publicKey
           };
         }
-        this.emit('accountChange', newAccount);
+        this.emit('accountChange', newAccount.publicKey);
       };
       await provider?.onAccountChange(handleAccountChange);
     } catch (error: any) {
@@ -315,12 +296,10 @@ export class PontemWalletAdapter extends BaseWalletAdapter {
   async onNetworkChange(): Promise<void> {
     try {
       const wallet = this._wallet;
-      const provider = this._provider || window.pontem;
+      const provider = this._provider || window.aptos;
       if (!wallet || !provider) throw new WalletNotConnectedError();
-      const handleNetworkChange = (network: NetworkInfo) => {
-        this._network = network.name;
-        this._api = network.api;
-        this._chainId = network.chainId;
+      const handleNetworkChange = async (newNetwork: { networkName: WalletAdapterNetwork }) => {
+        this._network = newNetwork.networkName;
         this.emit('networkChange', this._network);
       };
       await provider?.onNetworkChange(handleNetworkChange);
